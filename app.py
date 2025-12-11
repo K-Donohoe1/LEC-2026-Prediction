@@ -18,14 +18,14 @@ FILES = {
     2025: os.path.join(BASE_DIR, 'Data', '2025_LoL_esports_match_data_from_OraclesElixir.csv'),
 }
 
-# Only load columns we actually need (Saves 60% memory)
+# Only load columns we actually need
 USE_COLS = [
     'gameid', 'playername', 'position', 'teamname', 'champion', 
     'result', 'side', 'league', 'kills', 'deaths', 'assists',
     'golddiffat15', 'xpdiffat15', 'dpm', 'vspm'
 ]
 
-# Force lower precision to save memory (float32 vs float64)
+# Force lower precision to save memory
 DTYPES = {
     'result': 'int8',
     'kills': 'int16', 
@@ -73,6 +73,7 @@ DB = {}
 RAW_DB = {}    
 CHAMP_DB = {}  
 MATCHUP_DB = {}
+SYSTEM_READY = False  # New Flag for Lazy Loading
 
 def clean_name(name):
     n = str(name).lower().strip()
@@ -82,7 +83,12 @@ def get_league_bonus(league):
     return LEAGUE_BONUS.get(league, LEAGUE_BONUS['Default'])
 
 def init_system():
-    global MODEL, DB, RAW_DB, CHAMP_DB, MATCHUP_DB
+    global MODEL, DB, RAW_DB, CHAMP_DB, MATCHUP_DB, SYSTEM_READY
+    
+    # LAZY LOADING CHECK
+    if SYSTEM_READY:
+        return
+        
     print("⏳ Initializing AI (Memory Optimized Mode)...")
     
     # Temp storage for yearly player stats
@@ -97,62 +103,52 @@ def init_system():
             
         print(f"📂 Processing {year}...")
         
-        # 1. Load optimized CSV
-        df = pd.read_csv(filepath, usecols=USE_COLS, dtype=DTYPES, low_memory=True)
-        df = df[df['position'] != 'team'].copy()
-        df['clean_name'] = df['playername'].apply(clean_name)
-        
-        # 2. Calculate Metrics (Z-Scores)
-        # Pool Depth (Count unique champs per player in this year)
-        pool = df.groupby(['clean_name', 'league'])['champion'].nunique().reset_index(name='pool_depth')
-        df = df.merge(pool, on=['clean_name', 'league'], how='left')
-        
-        for m in METRICS:
-            # Handle standard metrics
-            if m in df.columns:
-                league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
-                weights = df['league'].apply(get_league_bonus)
-                df[f'score_{m}'] = league_stats.fillna(0) + weights
-            # Handle pool_depth specially (it was just added)
-            elif m == 'pool_depth':
-                league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
-                weights = df['league'].apply(get_league_bonus)
-                df[f'score_{m}'] = league_stats.fillna(0) + weights
-
-        # 3. Store Player Stats for this Year (for final aggregation)
-        year_stats = df.groupby('clean_name')[[f'score_{m}' for m in METRICS]].mean()
-        for player, row in year_stats.iterrows():
-            if player not in player_yearly_scores: player_yearly_scores[player] = {}
-            player_yearly_scores[player][year] = row.values
-
-        # 4. Update RAW_DB and CHAMP_DB (Incremental update)
-        # We process raw stats here and add them to the global dicts
-        
-        # Raw Stats (accumulate totals)
-        # Note: For simplicity in memory-mode, we will just take the latest year's raw stats for display
-        # or you can implement a complex running average. For now, we overwrite to keep it fast.
-        current_raw = df.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
-        RAW_DB.update(current_raw) # This will mostly keep 2025 stats for display, which is fine
-
-        # Champion Stats
-        for p_name, p_data in df.groupby('clean_name'):
-            if p_name not in CHAMP_DB: CHAMP_DB[p_name] = {}
+        try:
+            # 1. Load optimized CSV
+            df = pd.read_csv(filepath, usecols=USE_COLS, dtype=DTYPES, low_memory=True)
+            df = df[df['position'] != 'team'].copy()
+            df['clean_name'] = df['playername'].apply(clean_name)
             
-            # This is slightly expensive, so we do a quick aggregation
-            champ_agg = p_data.groupby('champion').agg({
+            # 2. Calculate Metrics (Z-Scores)
+            # Pool Depth (Count unique champs per player in this year)
+            pool = df.groupby(['clean_name', 'league'])['champion'].nunique().reset_index(name='pool_depth')
+            df = df.merge(pool, on=['clean_name', 'league'], how='left')
+            
+            for m in METRICS:
+                # Handle standard metrics
+                if m in df.columns:
+                    league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
+                    weights = df['league'].apply(get_league_bonus)
+                    df[f'score_{m}'] = league_stats.fillna(0) + weights
+                # Handle pool_depth specially
+                elif m == 'pool_depth':
+                    league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
+                    weights = df['league'].apply(get_league_bonus)
+                    df[f'score_{m}'] = league_stats.fillna(0) + weights
+
+            # 3. Store Player Stats for this Year
+            year_stats = df.groupby('clean_name')[[f'score_{m}' for m in METRICS]].mean()
+            for player, row in year_stats.iterrows():
+                if player not in player_yearly_scores: player_yearly_scores[player] = {}
+                player_yearly_scores[player][year] = row.values
+
+            # 4. Update RAW_DB and CHAMP_DB
+            current_raw = df.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
+            RAW_DB.update(current_raw) 
+
+            # Champion Stats
+            champ_agg = df.groupby(['clean_name', 'champion']).agg({
                 'result': ['count', 'sum'],
                 'kills': 'sum', 'deaths': 'sum', 'assists': 'sum'
-            })
-            
-            for champ, agg in champ_agg.iterrows():
-                games = agg['result']['count']
-                wins = agg['result']['sum']
-                k = agg['kills']['sum']
-                d = agg['deaths']['sum']
-                a = agg['assists']['sum']
+            }).reset_index()
+
+            for _, row in champ_agg.iterrows():
+                p_name, champ = row['clean_name'], row['champion']
+                games, wins = row['result']['count'], row['result']['sum']
+                k, d, a = row['kills']['sum'], row['deaths']['sum'], row['assists']['sum']
                 
-                # Check if we already have data for this champ (from previous years)
-                if champ not in CHAMP_DB[p_name]:
+                if p_name not in CHAMP_DB: CHAMP_DB[p_name] = {}
+                if champ not in CHAMP_DB[p_name]: 
                     CHAMP_DB[p_name][champ] = {'games': 0, 'wins': 0, 'k': 0, 'd': 0, 'a': 0}
                 
                 c_entry = CHAMP_DB[p_name][champ]
@@ -162,72 +158,63 @@ def init_system():
                 c_entry['d'] += d
                 c_entry['a'] += a
 
-        # 5. Build Matchups (Blue vs Red)
-        valid_games = df['gameid'].value_counts()
-        complete_games = valid_games[valid_games == 10].index
-        
-        # Filter for only complete games to save iteration time
-        game_df = df[df['gameid'].isin(complete_games)]
-        
-        # Extract Matchups
-        blue = game_df[game_df['side'] == 'Blue'][['gameid', 'position', 'champion', 'result']]
-        red = game_df[game_df['side'] == 'Red'][['gameid', 'position', 'champion', 'result']]
-        merged = pd.merge(blue, red, on=['gameid', 'position'], suffixes=('_b', '_r'))
-        
-        # Update Matchup DB
-        for _, row in merged.iterrows():
-            # Blue POV
-            b_champ, r_champ = row['champion_b'], row['champion_r']
-            b_win = row['result_b']
+            # 5. Build Matchups (Blue vs Red)
+            valid_games = df['gameid'].value_counts()
+            complete_games = valid_games[valid_games == 10].index
+            game_df = df[df['gameid'].isin(complete_games)]
             
-            if b_champ not in MATCHUP_DB: MATCHUP_DB[b_champ] = {}
-            if r_champ not in MATCHUP_DB[b_champ]: MATCHUP_DB[b_champ][r_champ] = {'wins': 0, 'games': 0}
-            MATCHUP_DB[b_champ][r_champ]['games'] += 1
-            MATCHUP_DB[b_champ][r_champ]['wins'] += b_win
+            blue = game_df[game_df['side'] == 'Blue'][['gameid', 'position', 'champion', 'result']]
+            red = game_df[game_df['side'] == 'Red'][['gameid', 'position', 'champion', 'result']]
+            merged = pd.merge(blue, red, on=['gameid', 'position'], suffixes=('_b', '_r'))
             
-            # Red POV
-            if r_champ not in MATCHUP_DB: MATCHUP_DB[r_champ] = {}
-            if b_champ not in MATCHUP_DB[r_champ]: MATCHUP_DB[r_champ][b_champ] = {'wins': 0, 'games': 0}
-            MATCHUP_DB[r_champ][b_champ]['games'] += 1
-            MATCHUP_DB[r_champ][b_champ]['wins'] += (1 - b_win)
-
-        # 6. Prepare Training Data
-        # Group by game to get team vectors
-        for gid, match in game_df.groupby('gameid'):
-            blue_team = match[match['side'] == 'Blue']
-            red_team = match[match['side'] == 'Red']
-            
-            if len(blue_team) == 5 and len(red_team) == 5:
-                # Sum the scores we calculated earlier
-                b_score = blue_team[[f'score_{m}' for m in METRICS]].sum().values
-                r_score = red_team[[f'score_{m}' for m in METRICS]].sum().values
+            for _, row in merged.iterrows():
+                b_champ, r_champ = row['champion_b'], row['champion_r']
+                b_win = row['result_b']
                 
-                diff = b_score - r_score
-                label = 1 if blue_team.iloc[0]['result'] == 1 else 0
-                training_rows.append(np.append(diff, label))
+                if b_champ not in MATCHUP_DB: MATCHUP_DB[b_champ] = {}
+                if r_champ not in MATCHUP_DB[b_champ]: MATCHUP_DB[b_champ][r_champ] = {'wins': 0, 'games': 0}
+                MATCHUP_DB[b_champ][r_champ]['games'] += 1
+                MATCHUP_DB[b_champ][r_champ]['wins'] += b_win
+                
+                if r_champ not in MATCHUP_DB: MATCHUP_DB[r_champ] = {}
+                if b_champ not in MATCHUP_DB[r_champ]: MATCHUP_DB[r_champ][b_champ] = {'wins': 0, 'games': 0}
+                MATCHUP_DB[r_champ][b_champ]['games'] += 1
+                MATCHUP_DB[r_champ][b_champ]['wins'] += (1 - b_win)
 
-        # FREE MEMORY
-        print(f"🗑️ Cleaning up {year}...")
-        del df, pool, game_df, blue, red, merged
-        gc.collect() # Force Python to release RAM
+            # 6. Prepare Training Data
+            for gid, match in game_df.groupby('gameid'):
+                blue_team = match[match['side'] == 'Blue']
+                red_team = match[match['side'] == 'Red']
+                if len(blue_team) == 5 and len(red_team) == 5:
+                    b_score = blue_team[[f'score_{m}' for m in METRICS]].sum().values
+                    r_score = red_team[[f'score_{m}' for m in METRICS]].sum().values
+                    training_rows.append(np.append(b_score - r_score, 1 if blue_team.iloc[0]['result'] == 1 else 0))
+
+            # FREE MEMORY
+            print(f"🗑️ Cleaning up {year}...")
+            del df, pool, game_df, blue, red, merged
+            gc.collect() 
+            
+        except Exception as e:
+            print(f"❌ Error loading {year}: {e}")
 
     # --- FINAL AGGREGATION ---
     print("⚙️ Finalizing Models...")
     
-    # 1. Finalize Matchup DB (Calc Percentages)
+    # 1. Finalize Matchup DB
     for me in MATCHUP_DB:
         for enemy in MATCHUP_DB[me]:
             d = MATCHUP_DB[me][enemy]
             d['wr'] = round((d['wins'] / d['games']) * 100, 1)
 
-    # 2. Finalize Champ DB (Calc KDA/WR)
+    # 2. Finalize Champ DB
     for p in CHAMP_DB:
         for c in CHAMP_DB[p]:
             d = CHAMP_DB[p][c]
             d['win_rate'] = round((d['wins'] / d['games']) * 100, 1)
             d['kda'] = round((d['k'] + d['a']) / max(1, d['d']), 2)
 
-    # 3. Finalize Player Vectors (Weighted Average)
+    # 3. Finalize Player Vectors
     for player, years_data in player_yearly_scores.items():
         total_score = np.zeros(len(METRICS))
         total_weight = 0
@@ -237,8 +224,6 @@ def init_system():
             total_weight += w
         
         final_vec = total_score / total_weight if total_weight > 0 else total_score
-        
-        # Legacy Bonus
         if player in LEGACY: final_vec += LEGACY[player]
         DB[player] = final_vec
 
@@ -246,14 +231,15 @@ def init_system():
     if training_rows:
         print(f"🤖 Training on {len(training_rows)} matches...")
         train_data = np.array(training_rows)
-        X = train_data[:, :-1] # Features
-        y = train_data[:, -1]  # Target
-        
-        MODEL = LogisticRegression(C=1.0, solver='liblinear') # Liblinear is memory efficient
+        X = train_data[:, :-1]
+        y = train_data[:, -1]
+        MODEL = LogisticRegression(C=1.0, solver='liblinear')
         MODEL.fit(X, y)
         print("✅ AI Online!")
     else:
         print("❌ No training data found.")
+
+    SYSTEM_READY = True
 
 def get_team_vector(team):
     vec = np.zeros(len(METRICS))
@@ -262,24 +248,28 @@ def get_team_vector(team):
         if n in DB: vec += DB[n]
     return vec
 
-# Initialize on startup
-init_system()
-
 # ==========================================
 # ROUTES
 # ==========================================
 @app.route('/')
-def home(): return render_template('index.html', teams=ROSTERS)
+def home():
+    if not SYSTEM_READY:
+        print("🚀 Triggering First Load...")
+        init_system()
+    return render_template('index.html', teams=ROSTERS)
 
 @app.route('/draft')
 def draft_page():
+    if not SYSTEM_READY: init_system()
     all_champs = set()
     for p_data in CHAMP_DB.values(): all_champs.update(p_data.keys())
     return render_template('draft.html', teams=ROSTERS, champions=sorted(list(all_champs)))
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    if not SYSTEM_READY: init_system()
     if not MODEL: return jsonify({'error': 'Model loading...'})
+    
     data = request.json
     v1 = get_team_vector(data['blue'])
     v2 = get_team_vector(data['red'])
@@ -289,6 +279,8 @@ def predict():
 
 @app.route('/analyze_full_draft', methods=['POST'])
 def analyze_full_draft():
+    if not SYSTEM_READY: init_system()
+    
     draft = request.json.get('draft', [])
     results = []
     for row in draft:
@@ -309,4 +301,6 @@ def analyze_full_draft():
     return jsonify({'matchups': results})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+    # Get the PORT from Render, or use 10000 if running locally
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
