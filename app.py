@@ -9,16 +9,18 @@ app = Flask(__name__)
 # ==========================================
 # CONFIGURATION
 # ==========================================
-# Update paths as needed
-FILE_2022 = r"C:\Personal_Projects\LEC_Website\Data\2022_LoL_esports_match_data_from_OraclesElixir.csv"
-FILE_2023 = r"C:\Personal_Projects\LEC_Website\Data\2023_LoL_esports_match_data_from_OraclesElixir.csv"
-FILE_2024 = r"C:\Personal_Projects\LEC_Website\Data\2024_LoL_esports_match_data_from_OraclesElixir.csv"
-FILE_2025 = r"C:\Personal_Projects\LEC_Website\Data\2025_LoL_esports_match_data_from_OraclesElixir.csv"
+# Get the folder where this app.py file is running
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Tell Python to look in the "Data" folder right next to app.py
+FILE_2022 = os.path.join(BASE_DIR, 'Data', '2022_LoL_esports_match_data_from_OraclesElixir.csv')
+FILE_2023 = os.path.join(BASE_DIR, 'Data', '2023_LoL_esports_match_data_from_OraclesElixir.csv')
+FILE_2024 = os.path.join(BASE_DIR, 'Data', '2024_LoL_esports_match_data_from_OraclesElixir.csv')
+FILE_2025 = os.path.join(BASE_DIR, 'Data', '2025_LoL_esports_match_data_from_OraclesElixir.csv')
 
 METRICS = ['golddiffat15', 'xpdiffat15', 'dpm', 'vspm', 'pool_depth']
-
 # Weights for player rating (Recent years matter more)
-YEAR_WEIGHTS = {2025: 1.0, 2024: 0.75, 2023: 0.5, 2022: 0.25}
+YEAR_WEIGHTS = {2025: 1.25, 2024: 1.0, 2023: 0.75, 2022: 0.5}
 
 LEAGUE_BONUS = {
     'LEC': 1.5, 'LCK': 2.0, 'LPL': 2.0, 'LCS': 1.2, 'MSI': 2.0, 'WLDs': 2.0, 
@@ -31,7 +33,7 @@ NAME_ALIASES = {'crownshot': 'crownie', 'thebausffs': 'baus', 'bausffs': 'baus',
 LEGACY = {
     'razork': 1.1, 'upset': 1.1, 'vladi': 0.6, 'empyros': 0.6, 'lospa': 0.6,
     'humanoid': 0.1, 'skewmond': 0.9, 'caps': 0.9, 'hans sama': 0.8,
-    'nemesis': 0.85, 'rekkles': 0.9, 'crownie': 0.7, 'baus': 0.7, 'velja': 0.5
+    'nemesis': 0.9, 'rekkles': 0.6, 'crownie': 0.7,
 }
 
 ROSTERS = {
