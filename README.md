@@ -75,7 +75,7 @@ Riot Games, and all associated properties are trademarks or registered trademark
 * **Data:** Tim Sevenhuysen [Oracle's Elixir](https://oracleselixir.com/)   Game statistics are the property of Riot Games, and any usage of such data must follow Riot Games' terms and policies.
 * **Tech Stack:** Python, Flask, Pandas, Scikit-Learn
 
-URL to website using Render: https://lec-2026-prediction.onrender.com
+URL to website using Render: https://lec-2026-prediction.onrender.com (site currently doesn't work!)
 
 ---
 *Created for the 2026 LEC Season Simulation Project.*
