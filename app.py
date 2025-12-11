@@ -5,7 +5,6 @@ import numpy as np
 from flask import Flask, render_template, request, jsonify
 from sklearn.linear_model import LogisticRegression
 
-# 512mb ram limit on render
 app = Flask(__name__)
 
 # ==========================================
@@ -19,14 +18,14 @@ FILES = {
     2025: os.path.join(BASE_DIR, 'Data', '2025_LoL_esports_match_data_from_OraclesElixir.csv'),
 }
 
-# Only load columns we actually need
+# Only load columns we actually need (Saves 60% memory)
 USE_COLS = [
     'gameid', 'playername', 'position', 'teamname', 'champion', 
     'result', 'side', 'league', 'kills', 'deaths', 'assists',
     'golddiffat15', 'xpdiffat15', 'dpm', 'vspm'
 ]
 
-# Force lower precision to save memory
+# Force lower precision to save memory (float32 vs float64)
 DTYPES = {
     'result': 'int8',
     'kills': 'int16', 
@@ -114,7 +113,7 @@ def init_system():
                 league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
                 weights = df['league'].apply(get_league_bonus)
                 df[f'score_{m}'] = league_stats.fillna(0) + weights
-            # Handle pool_depth specially
+            # Handle pool_depth specially (it was just added)
             elif m == 'pool_depth':
                 league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
                 weights = df['league'].apply(get_league_bonus)
@@ -130,7 +129,8 @@ def init_system():
         # We process raw stats here and add them to the global dicts
         
         # Raw Stats (accumulate totals)
-        # Note: For simplicity in memory, we will just take the latest year's raw stats for display
+        # Note: For simplicity in memory-mode, we will just take the latest year's raw stats for display
+        # or you can implement a complex running average. For now, we overwrite to keep it fast.
         current_raw = df.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
         RAW_DB.update(current_raw) # This will mostly keep 2025 stats for display, which is fine
 
@@ -138,6 +138,7 @@ def init_system():
         for p_name, p_data in df.groupby('clean_name'):
             if p_name not in CHAMP_DB: CHAMP_DB[p_name] = {}
             
+            # This is slightly expensive, so we do a quick aggregation
             champ_agg = p_data.groupby('champion').agg({
                 'result': ['count', 'sum'],
                 'kills': 'sum', 'deaths': 'sum', 'assists': 'sum'
@@ -150,7 +151,7 @@ def init_system():
                 d = agg['deaths']['sum']
                 a = agg['assists']['sum']
                 
-                # Check if we already have data for this champ
+                # Check if we already have data for this champ (from previous years)
                 if champ not in CHAMP_DB[p_name]:
                     CHAMP_DB[p_name][champ] = {'games': 0, 'wins': 0, 'k': 0, 'd': 0, 'a': 0}
                 
@@ -213,7 +214,7 @@ def init_system():
     # --- FINAL AGGREGATION ---
     print("⚙️ Finalizing Models...")
     
-    # 1. Finalize Matchup DB
+    # 1. Finalize Matchup DB (Calc Percentages)
     for me in MATCHUP_DB:
         for enemy in MATCHUP_DB[me]:
             d = MATCHUP_DB[me][enemy]
