@@ -76,7 +76,7 @@ def init_system():
         try:
             # 1. Load Data & Fix Duplicates
             df = pd.read_csv(filepath, usecols=USE_COLS, dtype=DTYPES, low_memory=True)
-            df = df.loc[:, ~df.columns.duplicated()] # <--- CRITICAL FIX for "unhashable type"
+            df = df.loc[:, ~df.columns.duplicated()] # Fix unhashable error
             
             df = df[df['position'] != 'team'].copy()
             df['clean_name'] = df['playername'].apply(clean_name)
@@ -85,15 +85,12 @@ def init_system():
             pool = df.groupby(['clean_name', 'league'])['champion'].nunique().reset_index(name='pool_depth')
             df = df.merge(pool, on=['clean_name', 'league'], how='left')
             
-            # Pre-calculate league weights to avoid .apply() crash
-            # Using .map() is faster and safer
+            # Map weights safely
             league_weights = df['league'].map(LEAGUE_BONUS).fillna(LEAGUE_BONUS['Default'])
             
             for m in METRICS:
                 if m in df.columns or m == 'pool_depth':
-                    # Calculate stats
                     league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
-                    # Add bonus
                     df[f'score_{m}'] = league_stats.fillna(0) + league_weights
 
             # 3. Store Stats
@@ -129,7 +126,7 @@ def init_system():
                 r_score = red[[f'score_{m}' for m in METRICS]].sum().values
                 training_rows.append(np.append(b_score - r_score, 1 if blue.iloc[0]['result'] == 1 else 0))
             
-            # Matchup Logic (Simplified for speed)
+            # Matchups
             blue = game_df[game_df['side'] == 'Blue'][['gameid', 'position', 'champion', 'result']]
             red = game_df[game_df['side'] == 'Red'][['gameid', 'position', 'champion', 'result']]
             merged = pd.merge(blue, red, on=['gameid', 'position'], suffixes=('_b', '_r'))
@@ -141,7 +138,6 @@ def init_system():
                 MATCHUP_DB[b_c][r_c]['games'] += 1
                 MATCHUP_DB[b_c][r_c]['wins'] += res
                 
-                # Also add Red perspective
                 if r_c not in MATCHUP_DB: MATCHUP_DB[r_c] = {}
                 if b_c not in MATCHUP_DB[r_c]: MATCHUP_DB[r_c][b_c] = {'wins': 0, 'games': 0}
                 MATCHUP_DB[r_c][b_c]['games'] += 1
@@ -192,9 +188,8 @@ def get_team_vector(team):
 # ==========================================
 @app.route('/')
 def home():
-    if not SYSTEM_READY:
-        print("🚀 Triggering First Load...")
-        init_system()
+    # DO NOT LOAD SYSTEM HERE. This allows the page to load instantly.
+    # Render's Health Check will now pass.
     return render_template('index.html', teams=ROSTERS)
 
 @app.route('/draft')
