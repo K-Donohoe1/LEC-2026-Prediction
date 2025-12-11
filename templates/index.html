@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>LEC 2026 Machine Learning Prediction</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #121212; color: white; padding: 20px; text-align: center; }
+        .container { max-width: 1000px; margin: 0 auto; background: #1e1e1e; padding: 30px; border-radius: 15px; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
+        
+        /* TABS */
+        .tabs { display: flex; justify-content: center; margin-bottom: 20px; }
+        .tab-btn { background: #333; border: none; padding: 10px 20px; color: #888; cursor: pointer; font-size: 1.1em; transition: 0.3s; }
+        .tab-btn.active { background: #00d4ff; color: #000; font-weight: bold; }
+        .tab-btn:first-child { border-radius: 10px 0 0 10px; }
+        .tab-btn:last-child { border-radius: 0 10px 10px 0; }
+
+        .section { display: none; }
+        .section.active { display: block; animation: fadeIn 0.5s; }
+
+        /* INPUTS */
+        select { padding: 15px; font-size: 1.1em; width: 40%; background: #333; color: white; border: none; border-radius: 8px; margin: 10px; }
+        button { background: linear-gradient(45deg, #00d4ff, #0051ff); color: white; border: none; padding: 15px 40px; font-size: 1.5em; border-radius: 30px; cursor: pointer; margin-top: 20px; }
+        button:hover { transform: scale(1.05); }
+
+        /* COMPARISON CARD */
+        .player-card { display: flex; justify-content: space-between; align-items: center; background: #252525; padding: 20px; margin-top: 20px; border-radius: 10px; }
+        .stat-row { display: flex; justify-content: space-between; margin: 10px 0; padding: 10px; background: #333; border-radius: 5px; }
+        .stat-val { width: 100px; font-weight: bold; }
+        .stat-name { color: #aaa; width: 150px; }
+        .better { color: #00d4ff; }
+        .worse { color: #ff4d4d; }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🔮 LEC 2026 Machine Learning Prediction for 2026</h1>
+
+    <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('match')">Match Predictor</button>
+    <button class="tab-btn" onclick="switchTab('player')">Player Head-to-Head</button>
+    <a href="/draft" class="tab-btn" style="text-decoration:none; display:flex; align-items:center;">Live Draft Tool ↗</a>
+</div>
+
+    <div id="match" class="section active">
+        <h2>⚔️ Team Matchup</h2>
+        <select id="blueTeam" onchange="updatePlayers()">
+            {% for team in teams %}
+            <option value="{{ team }}">{{ team }}</option>
+            {% endfor %}
+        </select>
+        <span style="font-size:1.5em; font-weight:bold;">VS</span>
+        <select id="redTeam" onchange="updatePlayers()">
+            {% for team in teams %}
+            <option value="{{ team }}" {% if loop.index == 2 %}selected{% endif %}>{{ team }}</option>
+            {% endfor %}
+        </select>
+        <br>
+        <button onclick="predictMatch()">Predict Winner</button>
+        <h2 id="matchResult" style="color:#00d4ff; margin-top:20px;"></h2>
+    </div>
+
+    <div id="player" class="section">
+        <h2>⚡ Player Comparison</h2>
+        
+        <select id="roleSelect" onchange="updatePlayers()" style="width: 200px; background: #444;">
+            <option value="0">Top Lane</option>
+            <option value="1">Jungle</option>
+            <option value="2">Mid Lane</option>
+            <option value="3">ADC</option>
+            <option value="4">Support</option>
+        </select>
+
+        <div style="display:flex; justify-content:center; align-items:center;">
+            <div id="p1Name" style="font-size:1.5em; font-weight:bold; width:40%;">Player 1</div>
+            <div style="width:20%;">VS</div>
+            <div id="p2Name" style="font-size:1.5em; font-weight:bold; width:40%;">Player 2</div>
+        </div>
+
+        <div id="statsContainer">
+            </div>
+    </div>
+
+</div>
+
+<script>
+    // Pass Python data to JS
+    const ROSTERS = {{ teams | tojson }};
+    
+    function switchTab(tabId) {
+        document.querySelectorAll('.section').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+        document.getElementById(tabId).classList.add('active');
+        event.target.classList.add('active');
+        if(tabId === 'player') updatePlayers();
+    }
+
+    function updatePlayers() {
+        const blue = document.getElementById('blueTeam').value;
+        const red = document.getElementById('redTeam').value;
+        const roleIdx = document.getElementById('roleSelect').value;
+
+        // Get players for selected role
+        const p1 = ROSTERS[blue][roleIdx];
+        const p2 = ROSTERS[red][roleIdx];
+
+        document.getElementById('p1Name').innerText = p1;
+        document.getElementById('p2Name').innerText = p2;
+        document.getElementById('p1Name').style.color = "#00d4ff";
+        document.getElementById('p2Name').style.color = "#ff4d4d";
+
+        comparePlayers(p1, p2);
+    }
+
+    async function comparePlayers(p1, p2) {
+        const res = await fetch('/compare_players', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ player1: p1, player2: p2 })
+        });
+        const data = await res.json();
+        
+        const metrics = {
+            'golddiffat15': 'Gold Diff @ 15',
+            'xpdiffat15': 'XP Diff @ 15',
+            'dpm': 'Damage / Min',
+            'vspm': 'Vision Score / Min'
+        };
+
+        let html = '';
+        for (const [key, label] of Object.entries(metrics)) {
+            const v1 = data.p1[key];
+            const v2 = data.p2[key];
+            const c1 = v1 > v2 ? 'better' : 'worse';
+            const c2 = v2 > v1 ? 'better' : 'worse';
+
+            html += `
+            <div class="stat-row">
+                <div class="stat-val ${c1}">${v1}</div>
+                <div class="stat-name">${label}</div>
+                <div class="stat-val ${c2}">${v2}</div>
+            </div>`;
+        }
+        document.getElementById('statsContainer').innerHTML = html;
+    }
+
+    async function predictMatch() {
+        const blue = document.getElementById('blueTeam').value;
+        const red = document.getElementById('redTeam').value;
+        const res = await fetch('/predict', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ blue, red })
+        });
+        const data = await res.json();
+        document.getElementById('matchResult').innerText = 
+            `${data.winner} Wins (${data.blue_win_chance}% Confidence)`;
+    }
+
+    // Init
+    updatePlayers();
+</script>
+<footer style="margin-top: 50px; color: #666; font-size: 0.8em; line-height: 1.5;">
+    <p>
+        LEC 2026 Oracle is a fan project and is not endorsed by Riot Games. <br>
+        It does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. <br>
+        Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+    </p>
+    <p>
+        Data courtesy of <a href="https://oracleselixir.com/" style="color: #00d4ff; text-decoration: none;">Oracle's Elixir</a>.
+        This tool is for entertainment and simulation purposes only.
+    </p>
+</footer>
+</body>
+</html>

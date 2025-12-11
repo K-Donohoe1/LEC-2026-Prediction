@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>5v5 Draft Simulator</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background-color: #121212; color: white; padding: 20px; text-align: center; }
+        .container { max-width: 1200px; margin: 0 auto; background: #1e1e1e; padding: 30px; border-radius: 15px; box-shadow: 0 0 30px rgba(0,0,0,0.5); }
+        h1 { color: #ff0055; margin-bottom: 30px; }
+        
+        /* TEAM SELECTORS */
+        .team-bar { display: flex; justify-content: space-between; margin-bottom: 30px; padding: 0 50px; }
+        .team-select { width: 300px; padding: 10px; background: #333; color: white; border: 1px solid #555; border-radius: 5px; font-size: 1.2em; font-weight: bold; }
+        .blue-side { color: #00d4ff; border-color: #00d4ff; }
+        .red-side { color: #ff4d4d; border-color: #ff4d4d; }
+
+        /* DRAFT GRID */
+        .draft-grid { display: grid; grid-template-columns: 1fr 100px 1fr; gap: 20px; text-align: left; }
+        .role-row { display: contents; }
+        
+        .player-slot { background: #252525; padding: 15px; border-radius: 10px; display: flex; align-items: center; justify-content: space-between; }
+        .role-label { display: flex; align-items: center; justify-content: center; font-weight: bold; color: #666; font-size: 1.2em; }
+        
+        .champ-select { width: 150px; padding: 5px; background: #444; color: white; border: none; border-radius: 5px; }
+        .player-name { font-weight: bold; width: 120px; }
+
+        /* ANALYZE BUTTON */
+        .analyze-btn { grid-column: span 3; background: linear-gradient(45deg, #ff0055, #ff5500); color: white; border: none; padding: 15px; font-size: 1.5em; border-radius: 30px; cursor: pointer; margin-top: 30px; transition: transform 0.2s; }
+        .analyze-btn:hover { transform: scale(1.05); }
+
+        /* RESULTS */
+        .results-container { margin-top: 40px; display: none; }
+        .matchup-card { display: flex; justify-content: space-between; background: #2a2a2a; margin-bottom: 10px; padding: 15px; border-radius: 10px; border-left: 5px solid #00d4ff; border-right: 5px solid #ff4d4d; }
+        .stat-box { text-align: center; width: 30%; }
+        .stat-val { font-size: 1.2em; font-weight: bold; }
+        .stat-sub { font-size: 0.9em; color: #888; }
+        .vs-text { display: flex; align-items: center; font-weight: bold; color: #555; }
+        
+        .good { color: #00ff88; }
+        .bad { color: #ff4d4d; }
+        .mid { color: #ffcc00; }
+        
+        .nav-link { display: block; margin-bottom: 20px; color: #888; text-decoration: none; }
+        .nav-link:hover { color: white; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <a href="/" class="nav-link">← Back to Match Predictor</a>
+    <h1>🛑 5v5 Draft Simulator</h1>
+
+    <div class="team-bar">
+        <select id="blueTeam" class="team-select blue-side" onchange="updateRosters()">
+            {% for team in teams %}
+            <option value="{{ team }}">{{ team }}</option>
+            {% endfor %}
+        </select>
+        
+        <span style="font-size: 2em; font-weight: bold;">VS</span>
+        
+        <select id="redTeam" class="team-select red-side" onchange="updateRosters()">
+            {% for team in teams %}
+            <option value="{{ team }}" {% if loop.index == 2 %}selected{% endif %}>{{ team }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="draft-grid" id="draftGrid">
+        </div>
+
+    <button class="analyze-btn" onclick="analyzeDraft()">ANALYZE MATCHUPS</button>
+
+    <div id="resultsArea" class="results-container">
+        <h2>Lane Breakdown</h2>
+        <div id="matchupList"></div>
+    </div>
+
+</div>
+
+<script>
+    const ROSTERS = JSON.parse('{{ teams | tojson | safe }}');
+    const CHAMPIONS = JSON.parse('{{ champions | tojson | safe }}');
+    const ROLES = ['TOP', 'JUNGLE', 'MID', 'ADC', 'SUPPORT'];
+
+    function initGrid() {
+        const grid = document.getElementById('draftGrid');
+        grid.innerHTML = '';
+
+        ROLES.forEach((role, i) => {
+            const blueDiv = document.createElement('div');
+            blueDiv.className = 'player-slot';
+            blueDiv.innerHTML = `
+                <span class="player-name" id="blue-p-${i}">Player</span>
+                <select class="champ-select" id="blue-c-${i}">
+                    <option value="">Select...</option>
+                    ${CHAMPIONS.map(c => `<option value="${c}">${c}</option>`).join('')}
+                </select>
+            `;
+
+            const roleDiv = document.createElement('div');
+            roleDiv.className = 'role-label';
+            roleDiv.innerText = role;
+
+            const redDiv = document.createElement('div');
+            redDiv.className = 'player-slot';
+            redDiv.innerHTML = `
+                <select class="champ-select" id="red-c-${i}">
+                    <option value="">Select...</option>
+                    ${CHAMPIONS.map(c => `<option value="${c}">${c}</option>`).join('')}
+                </select>
+                <span class="player-name" id="red-p-${i}" style="text-align:right;">Player</span>
+            `;
+
+            grid.appendChild(blueDiv);
+            grid.appendChild(roleDiv);
+            grid.appendChild(redDiv);
+        });
+        updateRosters();
+    }
+
+    function updateRosters() {
+        const blue = document.getElementById('blueTeam').value;
+        const red = document.getElementById('redTeam').value;
+        ROLES.forEach((_, i) => {
+            document.getElementById(`blue-p-${i}`).innerText = ROSTERS[blue][i];
+            document.getElementById(`red-p-${i}`).innerText = ROSTERS[red][i];
+        });
+    }
+
+    async function analyzeDraft() {
+        const draftPayload = [];
+        ROLES.forEach((role, i) => {
+            draftPayload.push({
+                role: role,
+                blue_player: document.getElementById(`blue-p-${i}`).innerText,
+                blue_champ: document.getElementById(`blue-c-${i}`).value,
+                red_player: document.getElementById(`red-p-${i}`).innerText,
+                red_champ: document.getElementById(`red-c-${i}`).value
+            });
+        });
+
+        const res = await fetch('/analyze_full_draft', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ draft: draftPayload })
+        });
+        
+        const data = await res.json();
+        renderResults(data.matchups);
+    }
+
+    function renderResults(matchups) {
+        const list = document.getElementById('matchupList');
+        list.innerHTML = '';
+        
+        matchups.forEach(m => {
+            const b = m.blue.stats;
+            const r = m.red.stats;
+            const mu = m.matchup; // Global Matchup Stats
+            
+            const getCol = (wr) => wr >= 60 ? 'good' : (wr <= 40 && wr > 0 ? 'bad' : 'mid');
+
+            const card = document.createElement('div');
+            card.className = 'matchup-card';
+            
+            // --- UPDATED INNER HTML LOGIC HERE ---
+            card.innerHTML = `
+                <div class="stat-box">
+                    <div style="color:#00d4ff; font-weight:bold;">${m.blue.player}</div>
+                    <div style="font-size:0.9em; margin-bottom:5px;">${m.blue.champ || 'No Pick'}</div>
+                    <div class="stat-val ${getCol(b.win_rate)}">${b.win_rate}% WR</div>
+                    <div class="stat-sub">${b.games} Games</div>
+                </div>
+                
+                <div style="text-align:center; width: 30%;">
+                    <div class="vs-text" style="justify-content:center; margin-bottom:5px;">${m.role}</div>
+                    
+                    <div style="background:#222; padding:5px; border-radius:5px; border:1px solid #444;">
+                        <div style="font-size:0.8em; color:#888;">
+                            ${m.blue.champ} vs ${m.red.champ}
+                        </div>
+                        <div style="font-weight:bold; color:${getCol(mu.wr)}; font-size:1.1em;">
+                            ${mu.games > 0 ? mu.wr + '% Blue Win' : 'No Data'}
+                        </div>
+                        <div style="font-size:0.7em; color:#666;">(${mu.games} Matches)</div>
+                    </div>
+                </div>
+                
+                <div class="stat-box">
+                    <div style="color:#ff4d4d; font-weight:bold;">${m.red.player}</div>
+                    <div style="font-size:0.9em; margin-bottom:5px;">${m.red.champ || 'No Pick'}</div>
+                    <div class="stat-val ${getCol(r.win_rate)}">${r.win_rate}% WR</div>
+                    <div class="stat-sub">${r.games} Games</div>
+                </div>
+            `;
+            list.appendChild(card);
+        });
+        
+        document.getElementById('resultsArea').style.display = 'block';
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    }
+
+    initGrid();
+</script>
+
+</body>
+</html>
