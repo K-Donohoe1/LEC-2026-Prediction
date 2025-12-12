@@ -12,8 +12,9 @@ app = Flask(__name__)
 # ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILES = {
-    #2022: os.path.join(BASE_DIR, 'Data', '2022_LoL_esports_match_data_from_OraclesElixir.csv'),
-    #2023: os.path.join(BASE_DIR, 'Data', '2023_LoL_esports_match_data_from_OraclesElixir.csv'),
+    # 2022 and 2023 commented out to save memory
+    # 2022: os.path.join(BASE_DIR, 'Data', '2022_LoL_esports_match_data_from_OraclesElixir.csv'),
+    # 2023: os.path.join(BASE_DIR, 'Data', '2023_LoL_esports_match_data_from_OraclesElixir.csv'),
     2024: os.path.join(BASE_DIR, 'Data', '2024_LoL_esports_match_data_from_OraclesElixir.csv'),
     2025: os.path.join(BASE_DIR, 'Data', '2025_LoL_esports_match_data_from_OraclesElixir.csv'),
 }
@@ -55,17 +56,15 @@ DB = {}
 RAW_DB = {}    
 CHAMP_DB = {}  
 MATCHUP_DB = {}
-SYSTEM_READY = False
 
 def clean_name(name):
     n = str(name).lower().strip()
     return NAME_ALIASES.get(n, n)
 
 def init_system():
-    global MODEL, DB, RAW_DB, CHAMP_DB, MATCHUP_DB, SYSTEM_READY
-    if SYSTEM_READY: return
+    global MODEL, DB, RAW_DB, CHAMP_DB, MATCHUP_DB
     
-    print("⏳ Starting Delayed Data Load...")
+    print("⏳ Loading Data (2024-2025)...")
     player_yearly_scores = {}
     training_rows = []
     
@@ -76,7 +75,7 @@ def init_system():
         try:
             # 1. Load Data & Fix Duplicates
             df = pd.read_csv(filepath, usecols=USE_COLS, dtype=DTYPES, low_memory=True)
-            df = df.loc[:, ~df.columns.duplicated()] # Fix unhashable error
+            df = df.loc[:, ~df.columns.duplicated()]
             
             df = df[df['position'] != 'team'].copy()
             df['clean_name'] = df['playername'].apply(clean_name)
@@ -85,7 +84,6 @@ def init_system():
             pool = df.groupby(['clean_name', 'league'])['champion'].nunique().reset_index(name='pool_depth')
             df = df.merge(pool, on=['clean_name', 'league'], how='left')
             
-            # Map weights safely
             league_weights = df['league'].map(LEAGUE_BONUS).fillna(LEAGUE_BONUS['Default'])
             
             for m in METRICS:
@@ -98,7 +96,7 @@ def init_system():
             for player, row in year_stats.iterrows():
                 if player not in player_yearly_scores: player_yearly_scores[player] = {}
                 player_yearly_scores[player][year] = row.values
-            
+
             # Store Raw Stats for Head-to-Head
             current_raw = df.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
             RAW_DB.update(current_raw)
@@ -177,7 +175,6 @@ def init_system():
         train_data = np.array(training_rows)
         MODEL = LogisticRegression(C=1.0, solver='liblinear').fit(train_data[:, :-1], train_data[:, -1])
     
-    SYSTEM_READY = True
     print("✅ System Fully Loaded!")
 
 def get_team_vector(team):
@@ -192,21 +189,17 @@ def get_team_vector(team):
 # ==========================================
 @app.route('/')
 def home():
-    # Load fast. Do not run init_system() here.
     return render_template('index.html', teams=ROSTERS)
 
 @app.route('/draft')
 def draft_page():
-    if not SYSTEM_READY: init_system()
     all_champs = set()
     for p_data in CHAMP_DB.values(): all_champs.update(p_data.keys())
     return render_template('draft.html', teams=ROSTERS, champions=sorted(list(all_champs)))
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    if not SYSTEM_READY: init_system()
-    if not MODEL: return jsonify({'error': 'System loading... try again in 10s'})
-    
+    if not MODEL: return jsonify({'error': 'System loading...'})
     data = request.json
     v1, v2 = get_team_vector(data['blue']), get_team_vector(data['red'])
     prob = MODEL.predict_proba([(v1 - v2) / 5.0])[0][1]
@@ -214,7 +207,6 @@ def predict():
 
 @app.route('/compare_players', methods=['POST'])
 def compare_players():
-    if not SYSTEM_READY: init_system()
     data = request.json
     p1, p2 = clean_name(data['player1']), clean_name(data['player2'])
     def get_stats(p): return {k: round(v, 1) for k, v in RAW_DB.get(p, {m: 0 for m in METRICS}).items()}
@@ -222,7 +214,6 @@ def compare_players():
 
 @app.route('/analyze_full_draft', methods=['POST'])
 def analyze_full_draft():
-    if not SYSTEM_READY: init_system()
     draft = request.json.get('draft', [])
     results = []
     
@@ -243,6 +234,12 @@ def analyze_full_draft():
         
     return jsonify({'matchups': results})
 
+# --- MAIN EXECUTION ---
+# This runs immediately when the server starts
 if __name__ == '__main__':
+    # Load data ONCE at startup
+    init_system()
+    
+    # Start server
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
