@@ -148,14 +148,27 @@
     async function predictMatch() {
         const blue = document.getElementById('blueTeam').value;
         const red = document.getElementById('redTeam').value;
-        const res = await fetch('/predict', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ blue, red })
-        });
-        const data = await res.json();
-        document.getElementById('matchResult').innerText = 
-            `${data.winner} Wins (${data.blue_win_chance}% Confidence)`;
+        
+        try {
+            const res = await fetch('/predict', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ blue, red })
+            });
+            const data = await res.json();
+            
+            // --- UPDATED ERROR HANDLING LOGIC ---
+            if (data.error) {
+                document.getElementById('matchResult').innerHTML = 
+                    "<span style='color: #ffcc00; font-size: 0.8em;'>⚠️ " + data.error + "</span>";
+            } else {
+                document.getElementById('matchResult').innerText = 
+                    `${data.winner} Wins (${data.blue_win_chance}% Confidence)`;
+            }
+        } catch (error) {
+            console.error(error);
+            document.getElementById('matchResult').innerText = "❌ Connection Error. Try again.";
+        }
     }
 
     // Init
