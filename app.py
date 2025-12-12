@@ -98,6 +98,10 @@ def init_system():
             for player, row in year_stats.iterrows():
                 if player not in player_yearly_scores: player_yearly_scores[player] = {}
                 player_yearly_scores[player][year] = row.values
+            
+            # Store Raw Stats for Head-to-Head
+            current_raw = df.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
+            RAW_DB.update(current_raw)
 
             # 4. Champion Stats
             champ_agg = df.groupby(['clean_name', 'champion']).agg({
@@ -188,8 +192,7 @@ def get_team_vector(team):
 # ==========================================
 @app.route('/')
 def home():
-    # DO NOT LOAD SYSTEM HERE. This allows the page to load instantly.
-    # Render's Health Check will now pass.
+    # Load fast. Do not run init_system() here.
     return render_template('index.html', teams=ROSTERS)
 
 @app.route('/draft')
@@ -208,6 +211,14 @@ def predict():
     v1, v2 = get_team_vector(data['blue']), get_team_vector(data['red'])
     prob = MODEL.predict_proba([(v1 - v2) / 5.0])[0][1]
     return jsonify({'winner': data['blue'] if prob > 0.5 else data['red'], 'blue_win_chance': round(prob * 100, 1)})
+
+@app.route('/compare_players', methods=['POST'])
+def compare_players():
+    if not SYSTEM_READY: init_system()
+    data = request.json
+    p1, p2 = clean_name(data['player1']), clean_name(data['player2'])
+    def get_stats(p): return {k: round(v, 1) for k, v in RAW_DB.get(p, {m: 0 for m in METRICS}).items()}
+    return jsonify({'p1': get_stats(p1), 'p2': get_stats(p2)})
 
 @app.route('/analyze_full_draft', methods=['POST'])
 def analyze_full_draft():
