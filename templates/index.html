@@ -149,6 +149,8 @@
         const blue = document.getElementById('blueTeam').value;
         const red = document.getElementById('redTeam').value;
         
+        document.getElementById('matchResult').innerText = "Loading..."; // Feedback
+
         try {
             const res = await fetch('/predict', {
                 method: 'POST',
@@ -157,7 +159,7 @@
             });
             const data = await res.json();
             
-            // --- UPDATED ERROR HANDLING LOGIC ---
+            // --- UPDATED ERROR HANDLING ---
             if (data.error) {
                 document.getElementById('matchResult').innerHTML = 
                     "<span style='color: #ffcc00; font-size: 0.8em;'>⚠️ " + data.error + "</span>";
