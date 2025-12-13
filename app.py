@@ -199,29 +199,11 @@ def draft_page():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # FAIL-SAFE: If model is missing, force load it now
-    if not MODEL: 
-        print("⚠️ Model not found. Initializing system now...")
-        init_system()
-    
-    if not MODEL:
-        return jsonify({'error': 'System still loading... try again in 5s'})
-    
+    if not MODEL: return jsonify({'error': 'System loading...'})
     data = request.json
-    v1 = get_team_vector(data['blue'])
-    v2 = get_team_vector(data['red'])
-
-    diff = (v1 - v2) / 5.0
-    
-    # Make prediction
-    prob = MODEL.predict_proba([diff])[0][1]
-    
-    # Print result to logs so we can see it in Render
-    winner = data['blue'] if prob > 0.5 else data['red']
-    confidence = round(prob * 100, 1)
-    print(f"✅ Prediction: {winner} ({confidence}%)")
-    
-    return jsonify({'winner': winner, 'blue_win_chance': confidence})
+    v1, v2 = get_team_vector(data['blue']), get_team_vector(data['red'])
+    prob = MODEL.predict_proba([(v1 - v2) / 5.0])[0][1]
+    return jsonify({'winner': data['blue'] if prob > 0.5 else data['red'], 'blue_win_chance': round(prob * 100, 1)})
 
 @app.route('/compare_players', methods=['POST'])
 def compare_players():
