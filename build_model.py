@@ -54,7 +54,7 @@ def clean_name(name):
     return NAME_ALIASES.get(n, n)
 
 def run():
-    print("🚀 Starting Local Build Process (4-Year Mode)...")
+    print("Starting Local Build Process (4-Year Mode)...")
     
     # 1. Identify Target Players (To keep their stats even from minor leagues)
     target_players = set()
@@ -62,7 +62,7 @@ def run():
         for p in roster:
             target_players.add(clean_name(p))
             
-    print(f"📋 Tracking {len(target_players)} specific players.")
+    print(f"Tracking {len(target_players)} specific players.")
 
     # Data Holders
     DB = {}         # Player Vectors (AI)
@@ -76,10 +76,10 @@ def run():
     # 2. Process Files
     for year, filepath in FILES.items():
         if not os.path.exists(filepath):
-            print(f"⚠️ Missing: {filepath}")
+            print(f"Missing: {filepath}")
             continue
             
-        print(f"📂 Processing {year}...")
+        print(f"Processing {year}...")
         
         # Load FULL file
         df = pd.read_csv(filepath, usecols=USE_COLS, low_memory=False)
@@ -168,7 +168,7 @@ def run():
             MATCHUP_DB[r_c][b_c]['games'] += 1
             MATCHUP_DB[r_c][b_c]['wins'] += (1 - res)
 
-    print("💾 Saving Data...")
+    print("Saving Data...")
     
     # Finalize DB Vectors (Weighted Average)
     for player, years in player_yearly_scores.items():
@@ -196,7 +196,7 @@ def run():
             d['wr'] = round((d['wins'] / d['games']) * 100, 1)
 
     # Train Model
-    print(f"🤖 Training Model on {len(training_rows)} matches...")
+    print(f"Training Model on {len(training_rows)} matches...")
     if training_rows:
         train_data = np.array(training_rows)
         model = LogisticRegression(C=1.0, solver='liblinear')
@@ -215,9 +215,9 @@ def run():
         with open('stats.json', 'w') as f:
             json.dump(stats_data, f)
 
-        print("✅ DONE! Created 'model.pkl' and 'stats.json'")
+        print("DONE! Created 'model.pkl' and 'stats.json'")
     else:
-        print("❌ Error: No training data found!")
+        print("Error: No training data found!")
 
 if __name__ == "__main__":
     run()
