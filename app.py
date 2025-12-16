@@ -10,7 +10,7 @@ app = Flask(__name__)
 # CONFIGURATION
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILES = {
-    # had to cut out 2022 and 2023 due to render ram limits
+    # Using 2024 and 2025 gives the best balance of recency and data size and to save ram
     2024: os.path.join(BASE_DIR, 'Data', '2024_LoL_esports_match_data_from_OraclesElixir.csv'),
     2025: os.path.join(BASE_DIR, 'Data', '2025_LoL_esports_match_data_from_OraclesElixir.csv'),
 }
@@ -20,7 +20,10 @@ DTYPES = {'result': 'int8', 'kills': 'int16', 'deaths': 'int16', 'assists': 'int
 METRICS = ['golddiffat15', 'xpdiffat15', 'dpm', 'vspm', 'pool_depth']
 YEAR_WEIGHTS = {2025: 1.0, 2024: 0.75}
 
-LEAGUE_BONUS = {'LEC': 1.5, 'LCK': 2.0, 'LPL': 2.0, 'LCS': 1.2, 'MSI': 2.0, 'WLDs': 2.0, 'Default': 0.0}
+# Only load data from these leagues to save RAM but keep high quality
+MAJOR_LEAGUES = ['LEC', 'LCS', 'LCK', 'LPL', 'MSI', 'WLDs']
+
+LEAGUE_BONUS = {'LEC': 1.5, 'LCK': 2.0, 'LPL': 2.0, 'LCS': 1.2, 'MSI': 2.0, 'WLDs': 2.0, 'Default': 1.0}
 NAME_ALIASES = {'crownshot': 'crownie', 'thebausffs': 'baus', 'bausffs': 'baus', 'reckles': 'rekkles', '113': 'isma'}
 LEGACY = {'razork': 1.1, 'upset': 1.1, 'caps': 0.9, 'hans sama': 0.8, 'humanoid': 0.1}
 
@@ -52,17 +55,14 @@ def clean_name(name):
 def init_system():
     global MODEL, DB, RAW_DB, CHAMP_DB, MATCHUP_DB
     
-    print("⏳ Starting System...")
+    print("⏳ Starting System (Major Regions Only)...")
     
-    # 1. Create a "white list" of only the players in our rosters
-    # We will ignore stats for everyone else to save RAM
-    relevant_players = set()
+    # Pre-calculate set of LEC players for specific tagging
+    lec_players = set()
     for roster in ROSTERS.values():
         for p in roster:
-            relevant_players.add(clean_name(p))
+            lec_players.add(clean_name(p))
             
-    print(f"📋 Tracking {len(relevant_players)} LEC players...")
-
     player_yearly_scores = {}
     training_rows = []
     
@@ -71,14 +71,17 @@ def init_system():
         print(f"📂 Loading {year}...")
         
         try:
-            # Load Data
+            # 1. Load Data
             df = pd.read_csv(filepath, usecols=USE_COLS, dtype=DTYPES, low_memory=True)
-            df = df.loc[:, ~df.columns.duplicated()] # Fix unhashable error
+            df = df.loc[:, ~df.columns.duplicated()]
             
-            df = df[df['position'] != 'team'].copy()
+            # RAM SAVING: Filter to Major Leagues Only
+            df = df[df['league'].isin(MAJOR_LEAGUES)].copy()
+            
+            df = df[df['position'] != 'team']
             df['clean_name'] = df['playername'].apply(clean_name)
             
-            # Metrics
+            # 2. Metrics & Scores
             pool = df.groupby(['clean_name', 'league'])['champion'].nunique().reset_index(name='pool_depth')
             df = df.merge(pool, on=['clean_name', 'league'], how='left')
             
@@ -88,37 +91,39 @@ def init_system():
                     league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
                     df[f'score_{m}'] = league_stats.fillna(0) + league_weights
 
-            # --- OPTIMIZATION START ---
-            
-            # Store Scores (We still need global scores for training accuracy)
+            # 3. Store Scores (Global for Major Regions)
+            # This ensures we have data to train the model properly
             year_stats = df.groupby('clean_name')[[f'score_{m}' for m in METRICS]].mean()
             for player, row in year_stats.iterrows():
                 if player not in player_yearly_scores: player_yearly_scores[player] = {}
                 player_yearly_scores[player][year] = row.values
 
-            # Store Raw Stats (ONLY for relevant players)
-            df_relevant = df[df['clean_name'].isin(relevant_players)]
-            if not df_relevant.empty:
-                current_raw = df_relevant.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
+            # 4. Store Raw Stats (Only for LEC players to save RAM)
+            # We only need detailed comparison for players in our dropdowns
+            df_lec = df[df['clean_name'].isin(lec_players)]
+            if not df_lec.empty:
+                current_raw = df_lec.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
                 RAW_DB.update(current_raw)
 
-                # Champion Stats (ONLY for relevant players)
-                champ_agg = df_relevant.groupby(['clean_name', 'champion']).agg({
-                    'result': ['count', 'sum'], 'kills': 'sum', 'deaths': 'sum', 'assists': 'sum'
-                }).reset_index()
+            # 5. Champion Stats (Keep Global Major Regions)
+            # This ensures the Draft Tool has data for all champions played in pro play
+            champ_agg = df.groupby(['clean_name', 'champion']).agg({
+                'result': ['count', 'sum'], 'kills': 'sum', 'deaths': 'sum', 'assists': 'sum'
+            }).reset_index()
+            
+            for _, row in champ_agg.iterrows():
+                p_name, champ = row['clean_name'], row['champion']
+                games, wins = row['result']['count'], row['result']['sum']
+                k, d, a = row['kills']['sum'], row['deaths']['sum'], row['assists']['sum']
                 
-                for _, row in champ_agg.iterrows():
-                    p_name, champ = row['clean_name'], row['champion']
-                    games, wins = row['result']['count'], row['result']['sum']
-                    k, d, a = row['kills']['sum'], row['deaths']['sum'], row['assists']['sum']
-                    
-                    if p_name not in CHAMP_DB: CHAMP_DB[p_name] = {}
-                    if champ not in CHAMP_DB[p_name]: CHAMP_DB[p_name][champ] = {'games': 0, 'wins': 0, 'k': 0, 'd': 0, 'a': 0}
-                    
-                    c = CHAMP_DB[p_name][champ]
-                    c['games'] += games; c['wins'] += wins; c['k'] += k; c['d'] += d; c['a'] += a
+                if p_name not in CHAMP_DB: CHAMP_DB[p_name] = {}
+                if champ not in CHAMP_DB[p_name]: CHAMP_DB[p_name][champ] = {'games': 0, 'wins': 0, 'k': 0, 'd': 0, 'a': 0}
+                
+                c = CHAMP_DB[p_name][champ]
+                c['games'] += games; c['wins'] += wins; c['k'] += k; c['d'] += d; c['a'] += a
 
-            # Training Data
+            # 6. Training Data (Global Major Regions)
+            # Training on LCK/LPL data makes the model smarter
             valid_games = df['gameid'].value_counts()
             game_df = df[df['gameid'].isin(valid_games[valid_games == 10].index)]
             
@@ -129,7 +134,7 @@ def init_system():
                 r_score = red[[f'score_{m}' for m in METRICS]].sum().values
                 training_rows.append(np.append(b_score - r_score, 1 if blue.iloc[0]['result'] == 1 else 0))
             
-            # Matchups (Global) - Keeps "Champ vs Champ" data robust
+            # 7. Matchups (Global Major Regions)
             blue = game_df[game_df['side'] == 'Blue'][['gameid', 'position', 'champion', 'result']]
             red = game_df[game_df['side'] == 'Red'][['gameid', 'position', 'champion', 'result']]
             merged = pd.merge(blue, red, on=['gameid', 'position'], suffixes=('_b', '_r'))
@@ -146,12 +151,13 @@ def init_system():
                 MATCHUP_DB[r_c][b_c]['games'] += 1
                 MATCHUP_DB[r_c][b_c]['wins'] += (1 - res)
 
-            del df, pool, game_df, blue, red, merged, league_weights, df_relevant
+            del df, pool, game_df, blue, red, merged, league_weights, df_lec
             gc.collect()
             
         except Exception as e:
             print(f"❌ Error loading {year}: {e}")
 
+    # Finalize Calculations
     for p in CHAMP_DB:
         for c in CHAMP_DB[p]:
             d = CHAMP_DB[p][c]
@@ -163,31 +169,38 @@ def init_system():
             d = MATCHUP_DB[me][en]
             d['wr'] = round((d['wins'] / d['games']) * 100, 1)
 
-    # Only save AI scores for RELEVANT players to DB
+    # Build DB (Player Vectors)
+    # We allow ALL Major Region players here so the model vector logic works cleanly
     for player, years in player_yearly_scores.items():
-        # Optimization: Only store vector if player is in our roster list
-        if player in relevant_players:
-            total, weight = np.zeros(len(METRICS)), 0
-            for y, scores in years.items():
-                w = YEAR_WEIGHTS.get(y, 0.2)
-                total += scores * w
-                weight += w
+        total, weight = np.zeros(len(METRICS)), 0
+        for y, scores in years.items():
+            w = YEAR_WEIGHTS.get(y, 0.2)
+            total += scores * w
+            weight += w
+        if weight > 0:
             DB[player] = (total / weight) + LEGACY.get(player, 0)
 
+    # Train Model
     if training_rows:
         print(f"🤖 Training on {len(training_rows)} matches...")
         train_data = np.array(training_rows)
         MODEL = LogisticRegression(C=1.0, solver='liblinear').fit(train_data[:, :-1], train_data[:, -1])
-    
+    else:
+        print("❌ CRITICAL: No training data found. Model will fail.")
+
     print("✅ System Fully Loaded!")
 
 def get_team_vector(team):
     vec = np.zeros(len(METRICS))
     for p in ROSTERS[team]:
         n = clean_name(p)
-        if n in DB: vec += DB[n]
+        if n in DB: 
+            vec += DB[n]
+        else:
+            # Fallback for rookies/unknowns: use average stats
+            # This prevents crashes if a player isn't found
+            pass 
     return vec
-
 
 # ROUTES
 @app.route('/')
@@ -196,6 +209,7 @@ def home():
 
 @app.route('/draft')
 def draft_page():
+    # Build list of ALL unique champions seen in Major Regions
     all_champs = set()
     for p_data in CHAMP_DB.values(): all_champs.update(p_data.keys())
     return render_template('draft.html', teams=ROSTERS, champions=sorted(list(all_champs)))
@@ -204,7 +218,8 @@ def draft_page():
 def predict():
     if not MODEL: return jsonify({'error': 'System loading...'})
     data = request.json
-    v1, v2 = get_team_vector(data['blue']), get_team_vector(data['red'])
+    v1 = get_team_vector(data['blue'])
+    v2 = get_team_vector(data['red'])
     prob = MODEL.predict_proba([(v1 - v2) / 5.0])[0][1]
     return jsonify({'winner': data['blue'] if prob > 0.5 else data['red'], 'blue_win_chance': round(prob * 100, 1)})
 
