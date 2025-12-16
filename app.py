@@ -7,7 +7,9 @@ from sklearn.linear_model import LogisticRegression
 
 app = Flask(__name__)
 
+# ==========================================
 # CONFIGURATION
+# ==========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FILES = {
     2024: os.path.join(BASE_DIR, 'Data', '2024_LoL_esports_match_data_from_OraclesElixir.csv'),
@@ -19,10 +21,11 @@ DTYPES = {'result': 'int8', 'kills': 'int16', 'deaths': 'int16', 'assists': 'int
 METRICS = ['golddiffat15', 'xpdiffat15', 'dpm', 'vspm', 'pool_depth']
 YEAR_WEIGHTS = {2025: 1.0, 2024: 0.75}
 
-# Leagues used for high-quality training data
-TRAINING_LEAGUES = ['LEC', 'LCS', 'LCK', 'LPL', 'MSI', 'WLDs', 'LFL', 'LVP SL', 'PRM', 'NLC', 'EM']
+# MEMORY FIX: Only keep Tier 1 leagues for general training.
+# (Rookie stats will still be loaded via the 'target_players' check below)
+TRAINING_LEAGUES = ['LEC', 'LCS', 'LCK', 'LPL', 'MSI', 'WLDs']
 
-LEAGUE_BONUS = {'LEC': 1.5, 'LCK': 2.0, 'LPL': 2.0, 'LCS': 1.2, 'MSI': 2.0, 'WLDs': 2.0, 'LFL': 0.5, 'Default': 0.4}
+LEAGUE_BONUS = {'LEC': 1.5, 'LCK': 2.0, 'LPL': 2.0, 'LCS': 1.2, 'MSI': 2.0, 'WLDs': 2.5, 'LFL': 0.5, 'Default': 0.4}
 NAME_ALIASES = {'crownshot': 'crownie', 'thebausffs': 'baus', 'bausffs': 'baus', 'reckles': 'rekkles', '113': 'isma'}
 LEGACY = {'razork': 1.1, 'upset': 1.1, 'caps': 0.9, 'hans sama': 0.8, 'humanoid': 0.1}
 
@@ -54,9 +57,9 @@ def clean_name(name):
 def init_system():
     global MODEL, DB, RAW_DB, CHAMP_DB, MATCHUP_DB
     
-    print("⏳ Starting System (Smart Chunking)...")
+    print("⏳ Starting System (Optimized)...")
     
-    # 1. Build Target Player Set (for keeping ERL history)
+    # 1. Identify Target Players (So we grab their ERL games)
     target_players = set()
     for roster in ROSTERS.values():
         for p in roster:
@@ -72,29 +75,33 @@ def init_system():
         print(f"📂 Loading {year}...")
         
         try:
-            # SMART LOADING
-            # Read file in chunks of 10,000 rows to prevent RAM spike
+            # --- SMART CHUNKING ---
+            # Read file in small pieces
             chunk_iterator = pd.read_csv(filepath, usecols=USE_COLS, dtype=DTYPES, chunksize=10000)
-            
             filtered_chunks = []
             
             for chunk in chunk_iterator:
-                # Normalize names in this chunk
+                # OPTIMIZATION: Drop 'team' rows immediately to save 17% RAM
+                chunk = chunk[chunk['position'] != 'team'].copy()
+                
+                # Normalize names
                 chunk['clean_name'] = chunk['playername'].apply(lambda x: str(x).lower().strip())
                 chunk['clean_name'] = chunk['clean_name'].map(lambda x: NAME_ALIASES.get(x, x))
                 
-                # FILTER LOGIC:
-                # Keep row IF league is major OR player is in our target list
+                # FILTER: Keep if (Major League) OR (Is one of our Rookies)
                 mask = (chunk['league'].isin(TRAINING_LEAGUES)) | (chunk['clean_name'].isin(target_players))
                 filtered_chunks.append(chunk[mask])
             
-            # Combine only the useful data
-            df = pd.concat(filtered_chunks)
+            # Combine
+            if filtered_chunks:
+                df = pd.concat(filtered_chunks)
+            else:
+                continue
+
             del filtered_chunks, chunk_iterator
-            gc.collect() # Free RAM immediately
+            gc.collect() 
             
-            # PROCESSING
-            df = df[df['position'] != 'team'].copy()
+            # --- PROCESSING ---
             
             # Metrics
             pool = df.groupby(['clean_name', 'league'])['champion'].nunique().reset_index(name='pool_depth')
@@ -106,17 +113,17 @@ def init_system():
                     league_stats = df.groupby('league')[m].transform(lambda x: (x - x.mean()) / x.std())
                     df[f'score_{m}'] = league_stats.fillna(0) + league_weights
 
-            # Store Scores
+            # Store Scores (AI Model)
             year_stats = df.groupby('clean_name')[[f'score_{m}' for m in METRICS]].mean()
             for player, row in year_stats.iterrows():
                 if player not in player_yearly_scores: player_yearly_scores[player] = {}
                 player_yearly_scores[player][year] = row.values
 
-            # Store Raw Stats (Global map for comparisons)
+            # Store Raw Stats
             current_raw = df.groupby('clean_name')[['golddiffat15', 'xpdiffat15', 'dpm', 'vspm']].mean().to_dict('index')
             RAW_DB.update(current_raw)
 
-            # Champion Stats (Global - populates Draft Tool)
+            # Champion Stats
             champ_agg = df.groupby(['clean_name', 'champion']).agg({
                 'result': ['count', 'sum'], 'kills': 'sum', 'deaths': 'sum', 'assists': 'sum'
             }).reset_index()
@@ -139,9 +146,10 @@ def init_system():
             for gid, match in game_df.groupby('gameid'):
                 blue = match[match['side'] == 'Blue']
                 red = match[match['side'] == 'Red']
-                b_score = blue[[f'score_{m}' for m in METRICS]].sum().values
-                r_score = red[[f'score_{m}' for m in METRICS]].sum().values
-                training_rows.append(np.append(b_score - r_score, 1 if blue.iloc[0]['result'] == 1 else 0))
+                if len(blue) == 5 and len(red) == 5:
+                    b_score = blue[[f'score_{m}' for m in METRICS]].sum().values
+                    r_score = red[[f'score_{m}' for m in METRICS]].sum().values
+                    training_rows.append(np.append(b_score - r_score, 1 if blue.iloc[0]['result'] == 1 else 0))
             
             # Matchups
             blue = game_df[game_df['side'] == 'Blue'][['gameid', 'position', 'champion', 'result']]
@@ -178,7 +186,7 @@ def init_system():
             d = MATCHUP_DB[me][en]
             d['wr'] = round((d['wins'] / d['games']) * 100, 1)
 
-    # Build DB (Allowing all loaded players for best model coverage)
+    # Build DB
     for player, years in player_yearly_scores.items():
         total, weight = np.zeros(len(METRICS)), 0
         for y, scores in years.items():
