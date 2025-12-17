@@ -69,13 +69,14 @@ It then sums these scores for a 5-man roster and compares the total team vectors
 LEC 2026 Oracle is a fan project and is not endorsed by Riot Games.
 It does not reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties.
 Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.
+This is for entertainment purposes only!
 
 ## Credits
 
 * **Data:** Tim Sevenhuysen [Oracle's Elixir](https://oracleselixir.com/)   Game statistics are the property of Riot Games, and any usage of such data must follow Riot Games' terms and policies.
 * **Tech Stack:** Python, Flask, Pandas, Scikit-Learn
 
-URL to website using Render: https://lec-2026-prediction.onrender.com (site currently doesn't work!)
+URL to website using Render: https://lec-2026-prediction.onrender.com the site is up and running (hopefully)
 
 ---
 *Created for the 2026 LEC Season Simulation Project.*
